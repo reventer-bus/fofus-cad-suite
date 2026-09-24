@@ -1,5 +1,6 @@
-# FOFUS CAD Suite — Blender adapter (v2)
+# FOFUS CAD Suite — Blender adapter (v2.1)
 # Login with your FOFUS account, show your designer status, open your dashboard.
+# Tabs: Account | Works | Earnings — your jobs and pay, inside Blender.
 # Install: Blender → Edit → Preferences → Add-ons → Install → pick this file.
 #
 # First run: click "Log in with FOFUS" → browser opens designai.fofus.in/cad-link
@@ -11,10 +12,10 @@
 bl_info = {
     "name": "FOFUS CAD Suite",
     "author": "FOFUS (GNI Labs LLP)",
-    "version": (2, 0, 0),
+    "version": (2, 1, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > FOFUS",
-    "description": "FOFUS account login, designer status panel, and genuine-designing presence",
+    "description": "FOFUS account login, designer status, works board, earnings — and genuine-designing presence",
     "category": "System",
 }
 
@@ -30,6 +31,7 @@ import urllib.parse
 import urllib.request
 
 API = "https://designai.fofus.in/api"
+WEB = "https://designai.fofus.in"
 CAD_LINK = "https://designai.fofus.in/cad-link"
 TOOL = "blender"
 HEARTBEAT_SEC = 60
@@ -81,8 +83,8 @@ def _api_get(path, jwt):
 
 
 def _login(email, password):
-    """POST /api/login -> JWT. Raises with server detail on failure."""
-    return _api_post("/login", {"email": email, "password": password})
+    """POST /api/auth/login -> JWT. Raises with server detail on failure."""
+    return _api_post("/auth/login", {"email": email, "password": password})
 
 
 def _auto_pair(jwt):
@@ -106,6 +108,65 @@ def _refresh_account(jwt):
         _store(acc_error=str(e)[:120])
 
 
+# ------------------------------------------------------------ works + earnings
+
+def _refresh_works(jwt):
+    """Pull the designer's kanban board into compact per-card lines."""
+    try:
+        board = _api_get("/designers/me/board", jwt)
+        cols = board.get("columns") or {}
+        lines = []
+        for col_name, cards in cols.items():
+            for c in cards:
+                price = c.get("price")
+                line = "{} {} — {}".format(
+                    c.get("project_number") or c.get("id", ""), c.get("title", "?"),
+                    col_name)
+                if price:
+                    line += " · ₹{}".format(price)
+                if c.get("est_earnings"):
+                    line += " · earn ₹{}".format(c["est_earnings"])
+                if c.get("deadline"):
+                    line += " · due {}".format(c["deadline"])
+                if c.get("chat_unread"):
+                    line += " · {} chat!".format(c["chat_unread"])
+                lines.append(line)
+        if not lines:
+            lines = ["No works yet — pick one on the Opportunities page."]
+        stats = board.get("stats") or {}
+        active = stats.get("In Progress", 0) + stats.get("Working", 0) + stats.get("Active", 0)
+        available = stats.get("Available", 0) + stats.get("Unassigned", 0) + stats.get("Opportunities", 0)
+        _store(works_data="\n".join(lines[:12]),
+               works_stats="{} active · {} available".format(active, available),
+               works_error="")
+    except Exception as e:
+        _store(works_error=str(e)[:120])
+
+
+def _refresh_earnings(jwt):
+    try:
+        w = _api_get("/wallet", jwt)
+        ev = _api_get("/earn/mine", jwt).get("events") or []
+        lines = []
+        for e in ev[:10]:
+            lines.append("₹{} · {} · {}".format(
+                e.get("credits", "?"), e.get("source", ""), str(e.get("period", ""))))
+        if not lines:
+            lines = ["No earnings yet — finish a work to earn."]
+        _store(earn_wallet_avail=str(w.get("available_balance", "")),
+               earn_wallet_pending=str(w.get("pending_balance", "")),
+               earn_lifetime=str(w.get("lifetime_earnings", "")),
+               earn_events="\n".join(lines), earn_error="")
+    except Exception as e:
+        _store(earn_error=str(e)[:120])
+
+
+def _refresh_all(jwt):
+    _refresh_account(jwt)
+    _refresh_works(jwt)
+    _refresh_earnings(jwt)
+
+
 # ------------------------------------------------- localhost callback receiver
 
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):  # noqa: N801
@@ -120,6 +181,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):  # noqa: N801
                 _store(token=pair.get("token", ""))
             except Exception as e:
                 _store(acc_error=str(e)[:120])
+            _refresh_all(jwt)
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
@@ -175,7 +237,7 @@ def _heartbeat():
             req = urllib.request.Request(
                 API + "/designers/presence/heartbeat",
                 data=body.encode(),
-                headers={"Content-Type": "application/json",
+                headers={"Content-Type": "text/json",
                          "x-fofus-presence": tok})
             urllib.request.urlopen(req, timeout=10)
         except Exception:
@@ -183,7 +245,7 @@ def _heartbeat():
     _timer_running = bpy.app.timers.is_registered(_heartbeat)
 
 
-# --------------------------------------------------------------------- panels
+# ------------------------------------------------------------------ operators
 
 class FOFUS_OT_login_browser(bpy.types.Operator):
     bl_idname = "fofus.login_browser"
@@ -200,7 +262,6 @@ class FOFUS_OT_login_browser(bpy.types.Operator):
 class FOFUS_OT_login_manual(bpy.types.Operator):
     bl_idname = "fofus.login_manual"
     bl_label = "Log in (email + password)"
-    bl_idname_dox = None
     email: bpy.props.StringProperty(name="Email")
     password: bpy.props.StringProperty(name="Password", subtype="PASSWORD")
 
@@ -217,7 +278,7 @@ class FOFUS_OT_login_manual(bpy.types.Operator):
                 _store(token=pair.get("token", ""))
             except Exception as e:
                 self.report({"WARNING"}, "Linked, but auto-pair failed: " + str(e)[:60])
-            _refresh_account(jwt)
+            _refresh_all(jwt)
             self.report({"INFO"}, "Logged in as " + str(_load("acc_name")))
             return {"FINISHED"}
         except urllib.error.HTTPError as e:
@@ -237,33 +298,46 @@ class FOFUS_OT_logout(bpy.types.Operator):
 
     def execute(self, context):
         _store(jwt="", token="", login_state="", acc_name="", acc_rank="",
-               acc_wallet="", acc_points="", acc_error="")
+               acc_wallet="", acc_points="", acc_error="",
+               works_data="", works_stats="", works_error="",
+               earn_wallet_avail="", earn_wallet_pending="", earn_lifetime="",
+               earn_events="", earn_error="")
         self.report({"INFO"}, "Logged out - revoke the device on the dashboard too")
         return {"FINISHED"}
 
 
-class FOFUS_OT_open_dashboard(bpy.types.Operator):
-    bl_idname = "fofus.open_dashboard"
-    bl_label = "Open FOFUS Dashboard"
+class FOFUS_OT_open_page(bpy.types.Operator):
+    bl_idname = "fofus.open_page"
+    bl_label = "Open page in browser"
+    page: bpy.props.StringProperty()  # dashboard | board | opportunities | earnings
 
     def execute(self, context):
-        _open_browser("https://designai.fofus.in")
+        paths = {
+            "dashboard": "https://designai.fofus.in",
+            "board": "https://designai.fofus.in/designer/board",
+            "opportunities": "https://designai.fofus.in/designer/opportunities",
+            "earnings": "https://designai.fofus.in/designer/earnings",
+        }
+        _open_browser(paths.get(self.page, "https://designai.fofus.in"))
         return {"FINISHED"}
 
 
 class FOFUS_OT_refresh(bpy.types.Operator):
     bl_idname = "fofus.refresh_account"
-    bl_label = "Refresh account"
+    bl_label = "Refresh all tabs"
+    bl_description = "Re-pull account, works and earnings from FOFUS"
 
     def execute(self, context):
         jwt = _load("jwt")
         if jwt:
-            _refresh_account(jwt)
+            _refresh_all(jwt)
         return {"FINISHED"}
 
 
-class FOFUS_PT_panel(bpy.types.Panel):
-    bl_label = "FOFUS"
+# ---------------------------------------------------------------------- tabs
+
+class FOFUS_PT_account(bpy.types.Panel):
+    bl_label = "Account"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "FOFUS"
@@ -277,20 +351,76 @@ class FOFUS_PT_panel(bpy.types.Panel):
             layout.operator("fofus.login_manual", icon="USER")
             return
         col = layout.column(align=True)
-        col.label(text="Account", icon="USER")
-        name = _load("acc_name") or "Designer"
-        col.label(text="  " + name)
+        col.label(text="  " + (_load("acc_name") or "Designer"), icon="USER")
         if _load("acc_rank"):
             col.label(text="  Rank: " + _load("acc_rank"))
         if _load("acc_wallet"):
-            col.label(text="  Wallet: " + _load("acc_wallet"))
+            col.label(text="  Wallet: ₹" + _load("acc_wallet"))
         if _load("acc_points"):
             col.label(text="  Points: " + _load("acc_points"))
         if _load("acc_error"):
             col.label(text="  Sync error", icon="ERROR")
+
+
+class FOFUS_PT_works(bpy.types.Panel):
+    bl_label = "Works"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "FOFUS"
+
+    def draw(self, context):
+        layout = self.layout
+        if not _load("jwt"):
+            layout.label(text="Log in to see your works", icon="LOCKED")
+            return
+        if _load("works_stats"):
+            layout.label(text="  " + _load("works_stats"), icon="PROJECT")
+        data = _load("works_data") or ""
+        for line in data.splitlines()[:8]:
+            layout.label(text=line[:70], icon="MESH_CUBE")
+        if _load("works_error"):
+            layout.label(text="  Load error", icon="ERROR")
+        layout.operator("fofus.open_page", icon="URL", text="Open full board").page = "board"
+        layout.operator("fofus.open_page", icon="COMMUNITY", text="Find work").page = "opportunities"
+
+
+class FOFUS_PT_earnings(bpy.types.Panel):
+    bl_label = "Earnings"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "FOFUS"
+
+    def draw(self, context):
+        layout = self.layout
+        if not _load("jwt"):
+            layout.label(text="Log in to see earnings", icon="LOCKED")
+            return
+        col = layout.column(align=True)
+        col.label(text="  Available: ₹" + (_load("earn_wallet_avail") or "0"), icon="FUND")
+        if _load("earn_wallet_pending"):
+            col.label(text="  Pending: ₹" + _load("earn_wallet_pending"))
+        if _load("earn_lifetime"):
+            col.label(text="  Lifetime: ₹" + _load("earn_lifetime"))
+        ev = _load("earn_events") or ""
+        for line in ev.splitlines()[:5]:
+            layout.label(text=line[:70], icon="REC")
+        if _load("earn_error"):
+            layout.label(text="  Load error", icon="ERROR")
+        layout.operator("fofus.open_page", icon="URL", text="Withdraw / wallet").page = "earnings"
+
+
+class FOFUS_PT_links(bpy.types.Panel):
+    bl_label = "Dashboard"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "FOFUS"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.operator("fofus.open_page", icon="URL", text="Open FOFUS in browser").page = "dashboard"
         layout.operator("fofus.refresh_account", icon="FILE_REFRESH")
-        layout.operator("fofus.open_dashboard", icon="URL")
-        layout.operator("fofus.logout", icon="X")
+        if _load("jwt"):
+            layout.operator("fofus.logout", icon="X")
 
 
 # --------------------------------------------------------------- registration
@@ -299,9 +429,12 @@ classes = (
     FOFUS_OT_login_browser,
     FOFUS_OT_login_manual,
     FOFUS_OT_logout,
-    FOFUS_OT_open_dashboard,
+    FOFUS_OT_open_page,
     FOFUS_OT_refresh,
-    FOFUS_PT_panel,
+    FOFUS_PT_account,
+    FOFUS_PT_works,
+    FOFUS_PT_earnings,
+    FOFUS_PT_links,
 )
 
 
@@ -316,6 +449,14 @@ class FofusPreferences(bpy.types.AddonPreferences):
     acc_wallet: bpy.props.StringProperty(default="")
     acc_points: bpy.props.StringProperty(default="")
     acc_error: bpy.props.StringProperty(default="")
+    works_data: bpy.props.StringProperty(default="")
+    works_stats: bpy.props.StringProperty(default="")
+    works_error: bpy.props.StringProperty(default="")
+    earn_wallet_avail: bpy.props.StringProperty(default="")
+    earn_wallet_pending: bpy.props.StringProperty(default="")
+    earn_lifetime: bpy.props.StringProperty(default="")
+    earn_events: bpy.props.StringProperty(default="")
+    earn_error: bpy.props.StringProperty(default="")
 
     def draw(self, context):
         layout = self.layout

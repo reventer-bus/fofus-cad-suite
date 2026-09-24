@@ -26,3 +26,10 @@ First run prompts for FOFUS email + password; state lands in
 NOTE (v1): the Release zip ships FofusCadSuite.cs (source). The DLL is built
 on a Windows machine — install.py detects when the DLL isn't bundled and
 points at this file.
+
+v2.1 callbacks (wire these in your menu/CommandManager setup — Tools → FOFUS):
+  ShowAccount()  — account + works + earnings dialog
+  Relogin()      — clear session + fresh login
+  OpenDashboard() — opens designai.fofus.in
+  OpenBoard()    — opens the designer works board
+  OpenEarnings() — opens the earnings/wallet page

@@ -12,7 +12,7 @@
 //   SolidWorks: Tools -> Add-Ins -> FOFUS CAD Suite.
 //
 // LOGIN: first run shows an input box for email, then a password box
-// (masked). Sent once over HTTPS to /api/login; only the JWT is kept in
+// (masked). Sent once over HTTPS to /api/auth/login; only the JWT is kept in
 // %APPDATA%\FofusCadSuite\session.json. Auto-pair mints the presence token.
 
 using System;
@@ -39,6 +39,8 @@ namespace FofusCadSuite
         private string jwt;                 // FOFUS session (session file)
         private string token;               // fpt_ secret, prefix stripped
         private string accSummary = "";
+        private string worksSummary = "";
+        private string earnSummary = "";
         private string lastDocTitle;
         private DateTime lastActivity;
         private const int HEARTBEAT_SEC = 60;
@@ -80,14 +82,25 @@ namespace FofusCadSuite
         // == Menu callbacks (Tools -> FOFUS) ================================
         public void ShowAccount()
         {
-            var doc = swApp?.IActiveDoc2;
-            var t = accSummary.Length > 0 ? accSummary : "Not logged in";
+            var t = accSummary.Length > 0
+                ? accSummary + "\n\n" + worksSummary + "\n\n" + earnSummary
+                : "Not logged in";
             swApp.SendMsgToUser2("FOFUS CAD Suite\n\n" + t, 0, 0);
+        }
+
+        public void OpenBoard()
+        {
+            try { System.Diagnostics.Process.Start("https://designai.fofus.in/designer/board"); } catch { }
+        }
+
+        public void OpenEarnings()
+        {
+            try { System.Diagnostics.Process.Start("https://designai.fofus.in/designer/earnings"); } catch { }
         }
 
         public void Relogin()
         {
-            token = null; jwt = null; accSummary = "";
+            token = null; jwt = null; accSummary = ""; worksSummary = ""; earnSummary = "";
             LoadState();
             if (token == null) FirstRunLogin();
         }
@@ -177,7 +190,7 @@ namespace FofusCadSuite
                     "FOFUS Login", "", -1, -1);
                 if (string.IsNullOrWhiteSpace(pass)) return;
                 var payload = "{\"email\":\"" + Escape(email.Trim()) + "\",\"password\":\"" + Escape(pass) + "\"}";
-                var resp = Post(server + "/api/login", payload, null);
+                var resp = Post(server + "/api/auth/login", payload, null);
                 jwt = ExtractString(resp, "access_token");
                 if (jwt == null)
                 {
@@ -209,15 +222,53 @@ namespace FofusCadSuite
                 var name = ExtractString(resp, "name") ?? "Designer";
                 var rank = ExtractString(resp, "rank") ?? "";
                 var wallet = ExtractString(resp, "wallet_balance") ?? "";
-                accSummary = "Account: " + name
-                    + (rank.Length > 0 ? "\nRank: " + rank : "")
-                    + (wallet.Length > 0 ? "\nWallet: " + wallet : "")
-                    + "\nStatus: presence active";
+                accSummary = "ACCOUNT\n  " + name
+                    + (rank.Length > 0 ? "\n  Rank: " + rank : "")
+                    + (wallet.Length > 0 ? "\n  Wallet: " + wallet : "")
+                    + "\n  Status: presence active";
+                FetchWorks(hdrs);
+                FetchEarnings(hdrs);
             }
             catch (Exception)
             {
                 accSummary = "Account sync failed (will retry on restart)";
             }
+        }
+
+        private void FetchWorks(Dictionary<string, string> hdrs)
+        {
+            try
+            {
+                var resp = Get(server + "/api/designers/me/board", hdrs);
+                var lines = new List<string> { "WORKS" };
+                var titles = ExtractStringArray(resp, "title");
+                var nums = ExtractStringArray(resp, "project_number");
+                for (int i = 0; i < Math.Min(titles.Count, 8); i++)
+                {
+                    var n = i < nums.Count ? nums[i] : "";
+                    lines.Add("  " + n + " " + titles[i]);
+                }
+                if (titles.Count == 0) lines.Add("  No works yet - see Opportunities.");
+                lines.Add("  Full board: designai.fofus.in/designer/board");
+                worksSummary = string.Join("\n", lines);
+            }
+            catch (Exception) { worksSummary = "WORKS\n  (load failed - run Refresh)"; }
+        }
+
+        private void FetchEarnings(Dictionary<string, string> hdrs)
+        {
+            try
+            {
+                var w = Get(server + "/api/wallet", hdrs);
+                var avail = ExtractString(w, "available_balance") ?? "0";
+                var pending = ExtractString(w, "pending_balance") ?? "";
+                var lifetime = ExtractString(w, "lifetime_earnings") ?? "";
+                earnSummary = "EARNINGS\n  Available: Rs" + avail
+                    + (pending.Length > 0 ? "\n  Pending: Rs" + pending : "")
+                    + (lifetime.Length > 0 ? "\n  Lifetime: Rs" + lifetime : "")
+                    + "\n  Withdraw: designai.fofus.in/designer/earnings";
+            }
+            catch (Exception) { earnSummary = "EARNINGS\n  (load failed - run Refresh)"; }
         }
 
         private void SaveState()
@@ -292,6 +343,24 @@ namespace FofusCadSuite
             var start = i + marker.Length;
             var end = json.IndexOf('"', start);
             return end < 0 ? null : json.Substring(start, end - start);
+        }
+
+        // Pull every "title":"..." style value from a JSON blob (board cards etc.)
+        private static List<string> ExtractStringArray(string json, string key)
+        {
+            var outp = new List<string>();
+            if (json == null) return outp;
+            var marker = "\"" + key + "\":\"";
+            var i = json.IndexOf(marker, StringComparison.Ordinal);
+            while (i >= 0)
+            {
+                var start = i + marker.Length;
+                var end = json.IndexOf('"', start);
+                if (end < 0) break;
+                outp.Add(json.Substring(start, end - start));
+                i = json.IndexOf(marker, end);
+            }
+            return outp;
         }
 
         private static string Escape(string s)

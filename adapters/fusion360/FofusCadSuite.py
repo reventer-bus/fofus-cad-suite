@@ -1,5 +1,7 @@
-# FOFUS CAD Suite - Fusion 360 adapter (v2)
+# FOFUS CAD Suite - Fusion 360 adapter (v2.1)
 # Design-time addin: FOFUS account login, designer status palette, presence heartbeats.
+# Panel text includes WORKS (your job board) + EARNINGS (wallet + recent events) —
+# the web app inside Fusion, no other dependency.
 #
 # Install: copy FofusCadSuite/ + FofusCadSuite.py to %APPDATA%\Autodesk\Autodesk Fusion 360\API\AddIns\FofusCadSuite\
 #          (Scripts and Add-Ins → FofusCadSuite → Run / check "Run on startup")
@@ -53,6 +55,51 @@ def _refresh_account():
                          "points": prof.get("points") or ""}
     except Exception:
         _state["acc"] = {"name": "Designer", "error": True}
+
+
+def _refresh_works():
+    """Pull the designer's kanban board into compact text lines."""
+    try:
+        board = _api_get("/designers/me/board", _state["jwt"])
+        cols = board.get("columns") or {}
+        stats = board.get("stats") or {}
+        lines = []
+        for col_name, cards in cols.items():
+            for c in cards:
+                line = "{} {} - {}".format(
+                    c.get("project_number") or c.get("id", ""), c.get("title", "?"), col_name)
+                if c.get("price"):
+                    line += " · Rs{}".format(c["price"])
+                if c.get("est_earnings"):
+                    line += " · earn Rs{}".format(c["est_earnings"])
+                if c.get("chat_unread"):
+                    line += " · {} chat!".format(c["chat_unread"])
+                lines.append(line)
+        if not lines:
+            lines = ["No works yet - see Opportunities."]
+        stats = board.get("stats") or {}
+        active = stats.get("In Progress", 0) + stats.get("Working", 0) + stats.get("Active", 0)
+        available = stats.get("Available", 0) + stats.get("Unassigned", 0) + stats.get("Opportunities", 0)
+        _state["works"] = {"stats": "{} active · {} available".format(active, available),
+                           "lines": lines[:10], "error": ""}
+    except Exception as e:
+        _state["works"] = {"error": str(e)[:100]}
+
+
+def _refresh_earnings():
+    try:
+        w = _api_get("/wallet", _state["jwt"])
+        ev = _api_get("/earn/mine", _state["jwt"]).get("events") or []
+        lines = ["Rs{} - {} - {}".format(e.get("credits", "?"), e.get("source", ""),
+                                         str(e.get("period", ""))) for e in ev[:10]]
+        if not lines:
+            lines = ["No earnings yet - finish a work to earn."]
+        _state["earn"] = {"avail": str(w.get("available_balance", "")),
+                          "pending": str(w.get("pending_balance", "")),
+                          "lifetime": str(w.get("lifetime_earnings", "")),
+                          "lines": lines, "error": ""}
+    except Exception as e:
+        _state["earn"] = {"error": str(e)[:100]}
 
 
 def _heartbeat_loop():
@@ -123,7 +170,7 @@ def _open_browser(url):
 
 
 def _login_manual(email, password):
-    resp = _api_post("/login", {"email": email, "password": password})
+    resp = _api_post("/auth/login", {"email": email, "password": password})
     _state["jwt"] = resp.get("access_token", "")
     if _state["jwt"]:
         try:
@@ -133,6 +180,8 @@ def _login_manual(email, password):
         except Exception:
             pass
         _refresh_account()
+        _refresh_works()
+        _refresh_earnings()
 
 
 class FofusLoginBrowserCommand(adsk.core.CommandBaseEventHandler):
@@ -152,7 +201,7 @@ class FofusLoginBrowserCommand(adsk.core.CommandBaseEventHandler):
 
 class FofusLogoutCommand(adsk.core.CommandBaseEventHandler):
     def notify(self, args):
-        _state.update({"jwt": "", "token": "", "acc": {}})
+        _state.update({"jwt": "", "token": "", "acc": {}, "works": {}, "earn": {}})
         if _ui:
             _ui.messageBox("Logged out. Revoke the device on the dashboard too.")
 
@@ -162,15 +211,55 @@ class FofusOpenDashboardCommand(adsk.core.CommandBaseEventHandler):
         _open_browser("https://designai.fofus.in")
 
 
+class FofusRefreshCommand(adsk.core.CommandBaseEventHandler):
+    def notify(self, args):
+        if _state.get("jwt"):
+            _refresh_account()
+            _refresh_works()
+            _refresh_earnings()
+        if _ui:
+            _ui.messageBox(_panel_text())
+
+
+class FofusOpenBoardCommand(adsk.core.CommandBaseEventHandler):
+    def notify(self, args):
+        _open_browser("https://designai.fofus.in/designer/board")
+
+
 def _panel_text():
     acc = _state.get("acc") or {}
     lines = ["FOFUS"]
     if _state.get("jwt"):
-        lines.append("Account: " + str(acc.get("name", "Designer")))
+        lines.append("ACCOUNT")
+        lines.append("  " + str(acc.get("name", "Designer")))
         for k, label in (("rank", "Rank"), ("wallet", "Wallet"), ("points", "Points")):
             if acc.get(k):
-                lines.append(f"{label}: {acc[k]}")
+                lines.append("  {}: {}".format(label, acc[k]))
         lines.append("Status: presence active")
+        lines.append("")
+        w = _state.get("works") or {}
+        lines.append("WORKS")
+        if w.get("stats"):
+            lines.append("  " + w["stats"])
+        for ln in w.get("lines", []):
+            lines.append("  " + ln[:80])
+        if w.get("error"):
+            lines.append("  (works load failed — run Refresh)")
+        lines.append("")
+        e = _state.get("earn") or {}
+        lines.append("EARNINGS")
+        if e.get("avail"):
+            lines.append("  Available: Rs" + e["avail"])
+        if e.get("pending"):
+            lines.append("  Pending: Rs" + e["pending"])
+        for ln in e.get("lines", [])[:5]:
+            lines.append("  " + ln[:80])
+        if e.get("error"):
+            lines.append("  (earnings load failed — run Refresh)")
+        lines.append("")
+        lines.append("Dashboard: designai.fofus.in")
+        lines.append("Full board: designai.fofus.in/designer/board")
+        lines.append("Earnings: designai.fofus.in/designer/earnings")
     else:
         lines.append("Not logged in")
     return "\n".join(lines)
@@ -186,8 +275,13 @@ def run(context):
         _timer = threading.Thread(target=_heartbeat_loop, daemon=True)
         _timer.start()
 
+        if _state.get("jwt"):
+            _refresh_account()
+            _refresh_works()
+            _refresh_earnings()
+
         if _ui:
-            _ui.messageBox("FOFUS CAD Suite loaded.\n\nNot logged in yet: run Utilities → Add-Ins → FOFUS CAD Suite → Login.\n\n" + _panel_text())
+            _ui.messageBox("FOFUS CAD Suite loaded.\n\n" + _panel_text())
     except Exception:
         if _ui:
             _ui.messageBox("Failed:\n{}".format(traceback.format_exc()))
