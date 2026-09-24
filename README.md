@@ -1,0 +1,46 @@
+# FOFUS CAD Suite
+
+One installer for **Blender**, **Fusion 360** and **SolidWorks**. Log in with your FOFUS account inside your CAD tool and your designer status — name, rank, wallet — shows right there, plus a button to open your full dashboard.
+
+## Install (2 minutes)
+
+1. Download **FOFUS-CAD-Suite-1.0.0.zip** from [Releases](../../releases/latest)
+2. Unzip and run **install.bat** (or `py install.py`)
+3. Open your CAD tool → **FOFUS panel** → **Log in with FOFUS**
+
+Your browser opens designai.fofus.in once; the plugin links itself and shows your account. That's it — when you're genuinely designing, customers see you **Online** on the FOFUS roster.
+
+### Tool-specific finishing steps
+
+| Tool | After install.bat |
+|---|---|
+| Blender | Edit → Preferences → Add-ons → tick **FOFUS CAD Suite** |
+| Fusion 360 | Utilities → Add-Ins → **FofusCadSuite** → Run (tick *Run on startup*) |
+| SolidWorks | Admin cmd: `regasm /codebase FofusCadSuite.dll` → Tools → Add-Ins → **FOFUS CAD Suite** |
+
+## What it does
+
+- **Login** — first run asks for your FOFUS account (browser handoff, or email + password). Only your session token is stored on this PC.
+- **Account panel** — your name, rank, wallet and points inside the tool; *Open Dashboard* jumps to the full web app.
+- **Presence** — signed heartbeats prove you're actively designing. Nothing about your files, paths or screen ever leaves your PC: only `{tool, active, idle_sec}` crosses the wire.
+- **Privacy** — log out anytime (inside the plugin), and revoke the device from the dashboard → Connect CAD.
+
+## Privacy & security
+
+- Only activity status crosses the wire — never filenames, paths or screens.
+- Heartbeats are HMAC-signed; tokens can be revoked per device anytime.
+- Login handoff happens over HTTPS; the localhost receiver listens only on 127.0.0.1 during login.
+
+## Build from source
+
+- Blender: plain Python, no build needed.
+- Fusion 360: zip in `adapters/fusion360/` is the shipping form.
+- SolidWorks: see `adapters/solidworks/BUILD-SOLIDWORKS.txt`.
+
+## Links
+
+- Dashboard (account details): https://designai.fofus.in
+- Store: https://store.fofus.in/in/store
+- FOFUS: https://fofus.in
+
+© 2026 FOFUS · GNI Labs LLP, Thrissur, Kerala, India

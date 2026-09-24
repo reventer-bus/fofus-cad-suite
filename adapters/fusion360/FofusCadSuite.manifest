@@ -1,0 +1,7 @@
+{
+  "id": "FofusCadSuite",
+  "author": "FOFUS (GNI Labs LLP)",
+  "description": "FOFUS CAD Suite - account login, designer status, presence",
+  "version": "2.0.0",
+  "runOnStartup": false
+}

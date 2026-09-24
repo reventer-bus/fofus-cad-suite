@@ -1,0 +1,28 @@
+BUILD — SolidWorks add-in (Windows only)
+========================================
+
+1. Install SolidWorks (any recent version) OR just the SolidWorks API SDK
+   (needs the two interop DLLs below).
+
+2. Open a Developer Command Prompt (or normal cmd with .NET Framework csc):
+
+   csc /target:library /out:FofusCadSuite.dll FofusCadSuite.cs ^
+       /r:"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS api\redist\SolidWorks.Interop.sldworks.dll" ^
+       /r:"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS api\redist\SolidWorks.Interop.swconst.dll" ^
+       /r:Microsoft.VisualBasic.dll
+
+   (adjust the SolidWorks path to your install; Microsoft.VisualBasic.dll is
+   in C:\Windows\Microsoft.NET\Framework64\v4.0.30319\)
+
+3. Register (admin cmd):
+
+   regasm /codebase FofusCadSuite.dll
+
+4. SolidWorks → Tools → Add-Ins → FOFUS CAD Suite → tick.
+
+First run prompts for FOFUS email + password; state lands in
+%APPDATA%\FofusCadSuite\session.json.
+
+NOTE (v1): the Release zip ships FofusCadSuite.cs (source). The DLL is built
+on a Windows machine — install.py detects when the DLL isn't bundled and
+points at this file.
